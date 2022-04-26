@@ -397,7 +397,7 @@ static ssize_t chroot_encrypted_read(struct shim_handle* hdl, void* buf, size_t 
     size_t actual_count;
 
     lock(&hdl->inode->lock);
-    int ret = encrypted_file_read(enc, buf, count, hdl->pos, &actual_count);
+    int ret = encrypted_file_read(enc, buf, count, *pos, &actual_count);
     unlock(&hdl->inode->lock);
 
     if (ret < 0)
@@ -417,7 +417,7 @@ static ssize_t chroot_encrypted_write(struct shim_handle* hdl, const void* buf, 
 
     lock(&hdl->inode->lock);
 
-    int ret = encrypted_file_write(enc, buf, count, hdl->pos, &actual_count);
+    int ret = encrypted_file_write(enc, buf, count, *pos, &actual_count);
     if (ret < 0)
         goto out;
 
