@@ -81,9 +81,24 @@ int mem_file_truncate(struct shim_mem_file* mem, file_off_t size) {
     if (OVERFLOWS(size_t, size))
         return -EFBIG;
 
-    int ret = mem_file_resize(mem, size);
-    if (ret < 0)
-        return ret;
+    size_t buf_size = mem->buf_size;
+    if ((size_t)size > buf_size) {
+        buf_size = MAX(buf_size, 1U);
+        while (buf_size < (size_t)size) {
+            if (__builtin_mul_overflow(buf_size, 2, &buf_size))
+                return -EFBIG;
+        }
+    } else {
+        while (buf_size / 2 > (size_t)size)
+            buf_size /= 2;
+    }
+
+    assert((size_t)size <= buf_size);
+    if (buf_size != mem->buf_size) {
+        int ret = mem_file_resize(mem, buf_size);
+        if (ret < 0)
+            return ret;
+    }
     mem->size = size;
     return 0;
 }
