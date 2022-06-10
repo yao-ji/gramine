@@ -8,11 +8,11 @@
 #include "ias.h"
 
 #include <assert.h>
-#include <cJSON.h>
 #include <ctype.h>
 #include <curl/curl.h>
 #include <errno.h>
 #include <mbedtls/base64.h>
+#include <mbedtls/pk.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -20,7 +20,12 @@
 #include <string.h>
 #include <strings.h>
 
-#include <mbedtls/pk.h>
+#ifdef HAVE_INTERNAL_CJSON
+/* here we -I the cJSON's repo root, which directly contains the header */
+#include <cJSON.h>
+#else
+#include <cjson/cJSON.h>
+#endif
 
 #include "util.h"
 
