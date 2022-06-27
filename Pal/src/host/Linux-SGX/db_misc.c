@@ -115,6 +115,8 @@ int _DkSystemTimeQuery(uint64_t* out_usec) {
     return 0;
 }
 
+uint32_t g_extended_feature_flags_max_supported_sub_leaves = 0;
+
 #define CPUID_CACHE_SIZE 64 /* cache only 64 distinct CPUID entries; sufficient for most apps */
 static struct pal_cpuid {
     unsigned int leaf, subleaf;
@@ -194,8 +196,7 @@ static void sanitize_cpuid(uint32_t leaf, uint32_t subleaf, uint32_t values[4]) 
         values[CPUID_WORD_ECX] = 0x6c65746e; /* 'ntel' */
     } else if (leaf == EXTENDED_FEATURE_FLAGS_LEAF) {
         if (subleaf == 0x0) {
-            values[CPUID_WORD_EAX] = 1; /* report max input value for supported sub-leaves */
-
+            values[CPUID_WORD_EAX] = g_extended_feature_flags_max_supported_sub_leaves;
             values[CPUID_WORD_EBX] |= 1U << 0; /* SGX-enabled CPUs always support FSGSBASE */
             values[CPUID_WORD_EBX] |= 1U << 2; /* SGX-enabled CPUs always report the SGX bit */
         }
@@ -424,9 +425,10 @@ int _DkCpuIdRetrieve(uint32_t leaf, uint32_t subleaf, uint32_t values[4]) {
         return 0;
     }
 
-    /* leaf 0x7 (Structured Extended Feature Flags) currently supports only subleafs 0 and 1, and
-     * must return all-zeros if the subleaf contains an invalid index (>1) */
-    if (leaf == EXTENDED_FEATURE_FLAGS_LEAF && subleaf > 1) {
+    /* leaf 0x7 (Structured Extended Feature Flags) must return all-zeros if the subleaf contains an
+     * invalid index (larger than max supported) */
+    if (leaf == EXTENDED_FEATURE_FLAGS_LEAF &&
+            subleaf > g_extended_feature_flags_max_supported_sub_leaves) {
         values[CPUID_WORD_EAX] = 0;
         values[CPUID_WORD_EBX] = 0;
         values[CPUID_WORD_ECX] = 0;
@@ -492,6 +494,21 @@ fail:
     log_error("Unrecognized leaf/subleaf in CPUID (EAX=0x%x, ECX=0x%x). Exiting...", leaf, subleaf);
     _DkProcessExit(1);
 }
+
+int init_cpuid(void) {
+    uint32_t values[4];
+    if (ocall_cpuid(EXTENDED_FEATURE_FLAGS_LEAF, 0x0, values) < 0)
+        return -PAL_ERROR_DENIED;
+
+    if (values[CPUID_WORD_EAX] > 1) {
+        /* max value for supported sub-leaves of "Extended Feature Flags" leaf is currently 1 */
+        return -PAL_ERROR_DENIED;
+    }
+
+    g_extended_feature_flags_max_supported_sub_leaves = values[CPUID_WORD_EAX];
+    return 0;
+}
+
 
 int _DkAttestationReport(const void* user_report_data, size_t* user_report_data_size,
                          void* target_info, size_t* target_info_size, void* report,
