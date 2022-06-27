@@ -115,7 +115,7 @@ int _DkSystemTimeQuery(uint64_t* out_usec) {
     return 0;
 }
 
-uint32_t g_extended_feature_flags_max_supported_sub_leaves = 0;
+static uint32_t g_extended_feature_flags_max_supported_sub_leaves = 0;
 
 #define CPUID_CACHE_SIZE 64 /* cache only 64 distinct CPUID entries; sufficient for most apps */
 static struct pal_cpuid {
