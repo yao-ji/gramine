@@ -20,6 +20,13 @@ static pf_aes_cmac_f        g_cb_aes_cmac        = NULL;
 static pf_aes_gcm_encrypt_f g_cb_aes_gcm_encrypt = NULL;
 static pf_aes_gcm_decrypt_f g_cb_aes_gcm_decrypt = NULL;
 static pf_random_f          g_cb_random          = NULL;
+static pf_time_f            g_cb_time            = NULL;
+
+#define MAX_TIMESTAMP_NUM 1024 * 64
+static uint64_t ts_read_node[MAX_TIMESTAMP_NUM][2] = { 0 };
+static uint64_t ts_write_node[MAX_TIMESTAMP_NUM][2] = { 0 };
+static uint64_t read_tm = 0;
+static uint64_t write_tm = 0;
 
 #ifdef DEBUG
 #define PF_DEBUG_PRINT_SIZE_MAX 4096
@@ -326,21 +333,18 @@ static bool ipf_read_node(pf_context_t* pf, pf_handle_t handle, uint64_t node_nu
                           uint32_t node_size) {
     uint64_t offset = node_number * node_size;
 
+    if (g_cb_time) {
+        g_cb_time(&ts_read_node[node_number][0]);
+    }
+
     pf_status_t status = g_cb_read(handle, buffer, offset, node_size);
     if (PF_FAILURE(status)) {
         pf->last_error = status;
         return false;
     }
 
-    return true;
-}
-
-static bool ipf_write_file(pf_context_t* pf, pf_handle_t handle, uint64_t offset, void* buffer,
-                           uint32_t size) {
-    pf_status_t status = g_cb_write(handle, buffer, offset, size);
-    if (PF_FAILURE(status)) {
-        pf->last_error = status;
-        return false;
+    if (g_cb_time) {
+        g_cb_time(&ts_read_node[node_number][1]);
     }
 
     return true;
@@ -348,7 +352,23 @@ static bool ipf_write_file(pf_context_t* pf, pf_handle_t handle, uint64_t offset
 
 static bool ipf_write_node(pf_context_t* pf, pf_handle_t handle, uint64_t node_number, void* buffer,
                            uint32_t node_size) {
-    return ipf_write_file(pf, handle, node_number * node_size, buffer, node_size);
+    uint64_t offset = node_number * node_size;
+
+    if (g_cb_time) {
+        g_cb_time(&ts_write_node[node_number][0]);
+    }
+
+    pf_status_t status = g_cb_write(handle, buffer, offset, node_size);
+    if (PF_FAILURE(status)) {
+        pf->last_error = status;
+        return false;
+    }
+
+    if (g_cb_time) {
+        g_cb_time(&ts_write_node[node_number][1]);
+    }
+
+    return true;
 }
 
 // this is a very 'specific' function, tied to the architecture of the file layout,
@@ -1140,10 +1160,18 @@ static bool ipf_close(pf_context_t* pf) {
         ipf_try_clear_error(pf); // last attempt to fix it
         retval = false;
     } else {
+        uint64_t ts_st = 0, ts_ed = 0;
+        if (g_cb_time) {
+            g_cb_time(&ts_st);
+        }
         if (!ipf_internal_flush(pf)) {
             DEBUG_PF("internal flush failed");
             retval = false;
         }
+        if (g_cb_time) {
+            g_cb_time(&ts_ed);
+        }
+        write_tm += ts_ed - ts_st;
     }
 
     // omeg: fs close is done by Gramine handler
@@ -1174,7 +1202,7 @@ static bool ipf_close(pf_context_t* pf) {
 void pf_set_callbacks(pf_read_f read_f, pf_write_f write_f, pf_truncate_f truncate_f,
                       pf_aes_cmac_f aes_cmac_f, pf_aes_gcm_encrypt_f aes_gcm_encrypt_f,
                       pf_aes_gcm_decrypt_f aes_gcm_decrypt_f, pf_random_f random_f,
-                      pf_debug_f debug_f) {
+                      pf_time_f time_f, pf_debug_f debug_f) {
     g_cb_read            = read_f;
     g_cb_write           = write_f;
     g_cb_truncate        = truncate_f;
@@ -1182,12 +1210,43 @@ void pf_set_callbacks(pf_read_f read_f, pf_write_f write_f, pf_truncate_f trunca
     g_cb_aes_gcm_encrypt = aes_gcm_encrypt_f;
     g_cb_aes_gcm_decrypt = aes_gcm_decrypt_f;
     g_cb_random          = random_f;
+    g_cb_time            = time_f;
     g_cb_debug           = debug_f;
     g_initialized = true;
 }
 
+uint64_t pf_get_time_used(int type) {
+    if (type == 0)
+        return read_tm;
+    else if (type == 1)
+        return write_tm;
+    else if (type == 2) {
+        uint64_t ret = 0;
+        for (int i = 0; i < MAX_TIMESTAMP_NUM; i++) {
+            if (ts_read_node[i][0] != 0 && ts_read_node[i][1] != 0)
+                ret += ts_read_node[i][1] - ts_read_node[i][0];
+        }
+        return ret;
+    }
+    else if (type == 3) {
+        uint64_t ret = 0;
+        for (int i = 0; i < MAX_TIMESTAMP_NUM; i++) {
+            if (ts_write_node[i][0] != 0 && ts_write_node[i][1] != 0)
+                ret += ts_write_node[i][1] - ts_write_node[i][0];
+        }
+        return ret;
+    }
+    else
+        return 0;
+}
+
 pf_status_t pf_open(pf_handle_t handle, const char* path, uint64_t underlying_size,
                     pf_file_mode_t mode, bool create, const pf_key_t* key, pf_context_t** context) {
+    erase_memory(ts_read_node, sizeof(ts_read_node));
+    erase_memory(ts_write_node, sizeof(ts_write_node));
+    read_tm = 0;
+    write_tm = 0;
+
     if (!g_initialized)
         return PF_STATUS_UNINITIALIZED;
 
@@ -1298,6 +1357,11 @@ pf_status_t pf_rename(pf_context_t* pf, const char* new_path) {
 
 pf_status_t pf_read(pf_context_t* pf, uint64_t offset, size_t size, void* output,
                     size_t* bytes_read) {
+    uint64_t ts_st = 0, ts_ed = 0;
+    if (g_cb_time) {
+        g_cb_time(&ts_st);
+    }
+
     if (!g_initialized)
         return PF_STATUS_UNINITIALIZED;
 
@@ -1321,10 +1385,21 @@ pf_status_t pf_read(pf_context_t* pf, uint64_t offset, size_t size, void* output
         return pf->last_error;
 
     *bytes_read = bytes;
+
+    if (g_cb_time) {
+        g_cb_time(&ts_ed);
+    }
+    read_tm += ts_ed - ts_st;
+
     return PF_STATUS_SUCCESS;
 }
 
 pf_status_t pf_write(pf_context_t* pf, uint64_t offset, size_t size, const void* input) {
+    uint64_t ts_st = 0, ts_ed = 0;
+    if (g_cb_time) {
+        g_cb_time(&ts_st);
+    }
+
     if (!g_initialized)
         return PF_STATUS_UNINITIALIZED;
 
@@ -1341,6 +1416,11 @@ pf_status_t pf_write(pf_context_t* pf, uint64_t offset, size_t size, const void*
 
     if (ipf_write(pf, input, offset, size) != size)
         return pf->last_error;
+
+    if (g_cb_time) {
+        g_cb_time(&ts_ed);
+    }
+    write_tm += ts_ed - ts_st;
 
     return PF_STATUS_SUCCESS;
 }

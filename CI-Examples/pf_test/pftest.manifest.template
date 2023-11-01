@@ -1,0 +1,22 @@
+# pf test manifest file example
+
+loader.entrypoint = "file:{{ gramine.libos }}"
+libos.entrypoint = "/pftest"
+loader.log_level = "{{ log_level }}"
+
+loader.env.LD_LIBRARY_PATH = "/lib"
+
+fs.mounts = [
+  { path = "/lib", uri = "file:{{ gramine.runtimedir() }}" },
+  { path = "/pftest", uri = "file:pftest" },
+  { type = "encrypted", path = "/test.enc", uri = "file:enc/test.enc", key_name = "_sgx_mrenclave" },
+]
+
+# sgx.debug = true
+sgx.edmm_enable = {{ 'true' if env.get('EDMM', '0') == '1' else 'false' }}
+
+sgx.trusted_files = [
+  "file:{{ gramine.libos }}",
+  "file:pftest",
+  "file:{{ gramine.runtimedir() }}/",
+]

@@ -167,6 +167,9 @@ typedef pf_status_t (*pf_aes_gcm_decrypt_f)(const pf_key_t* key, const pf_iv_t* 
  */
 typedef pf_status_t (*pf_random_f)(uint8_t* buffer, size_t size);
 
+typedef pf_status_t (*pf_time_f)(uint64_t* time);
+uint64_t pf_get_time_used(int type);
+
 /*!
  * \brief Initialize I/O callbacks.
  *
@@ -184,7 +187,7 @@ typedef pf_status_t (*pf_random_f)(uint8_t* buffer, size_t size);
 void pf_set_callbacks(pf_read_f read_f, pf_write_f write_f, pf_truncate_f truncate_f,
                       pf_aes_cmac_f aes_cmac_f, pf_aes_gcm_encrypt_f aes_gcm_encrypt_f,
                       pf_aes_gcm_decrypt_f aes_gcm_decrypt_f, pf_random_f random_f,
-                      pf_debug_f debug_f);
+                      pf_time_f time_f, pf_debug_f debug_f);
 
 /*! Context representing an open protected file */
 typedef struct pf_context pf_context_t;

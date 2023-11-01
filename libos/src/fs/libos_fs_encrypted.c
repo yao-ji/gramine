@@ -136,6 +136,15 @@ static pf_status_t cb_random(uint8_t* buffer, size_t size) {
     return PF_STATUS_SUCCESS;
 }
 
+static pf_status_t cb_time(uint64_t* time) {
+    int ret = PalSystemTimeQuery(time);
+    if (ret < 0) {
+        log_warning("PalSystemTimeQuery failed: %s", pal_strerror(ret));
+        return PF_STATUS_CALLBACK_FAILED;
+    }
+    return PF_STATUS_SUCCESS;
+}
+
 #ifdef DEBUG
 static void cb_debug(const char* msg) {
     log_debug("%s", msg);
@@ -237,6 +246,10 @@ static void encrypted_file_internal_close(struct libos_encrypted_file* enc) {
     assert(enc->pf);
 
     pf_status_t pfs = pf_close(enc->pf);
+    log_always("Read time used: %ld", pf_get_time_used(0));
+    log_always("Write time used: %ld", pf_get_time_used(1));
+    log_always("Read time saved: %ld", pf_get_time_used(2));
+    log_always("Write time saved: %ld", pf_get_time_used(3));
     if (PF_FAILURE(pfs)) {
         log_warning("pf_close failed: %s", pf_strerror(pfs));
     }
@@ -274,7 +287,7 @@ int init_encrypted_files(void) {
 
     pf_set_callbacks(&cb_read, &cb_write, &cb_truncate,
                      &cb_aes_cmac, &cb_aes_gcm_encrypt, &cb_aes_gcm_decrypt,
-                     &cb_random, cb_debug_ptr);
+                     &cb_random, &cb_time, cb_debug_ptr);
 
     int ret;
 

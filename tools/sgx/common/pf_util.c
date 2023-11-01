@@ -208,7 +208,7 @@ static int pf_set_linux_callbacks(pf_debug_f debug_f) {
     }
 
     pf_set_callbacks(linux_read, linux_write, linux_truncate, mbedtls_aes_cmac,
-                     mbedtls_aes_gcm_encrypt, mbedtls_aes_gcm_decrypt, mbedtls_random, debug_f);
+                     mbedtls_aes_gcm_encrypt, mbedtls_aes_gcm_decrypt, mbedtls_random, NULL, debug_f);
     return 0;
 }
 
