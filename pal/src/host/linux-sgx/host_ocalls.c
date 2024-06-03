@@ -190,7 +190,11 @@ static long sgx_ocall_fchmod(void* args) {
 
 static long sgx_ocall_fsync(void* args) {
     struct ocall_fsync* ocall_fsync_args = args;
-    return DO_SYSCALL_INTERRUPTIBLE(fsync, ocall_fsync_args->fd);
+    if (ocall_fsync_args->umem) {
+        return DO_SYSCALL_INTERRUPTIBLE(msync, ocall_fsync_args->umem, ocall_fsync_args->usize, MS_SYNC);
+    } else {
+        return DO_SYSCALL_INTERRUPTIBLE(fsync, ocall_fsync_args->fd);
+    }
 }
 
 static long sgx_ocall_ftruncate(void* args) {

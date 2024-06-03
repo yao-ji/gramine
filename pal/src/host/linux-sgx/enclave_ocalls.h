@@ -42,6 +42,8 @@ int ocall_fchmod(int fd, unsigned short mode);
 
 int ocall_fsync(int fd);
 
+int ocall_msync(void* umem, uint64_t usize);
+
 int ocall_ftruncate(int fd, uint64_t length);
 
 int ocall_mkdir(const char* pathname, unsigned short mode);

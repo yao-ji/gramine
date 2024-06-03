@@ -158,6 +158,8 @@ struct ocall_fchmod {
 
 struct ocall_fsync {
     int fd;
+    void* umem;
+    uint64_t usize;
 };
 
 struct ocall_ftruncate {

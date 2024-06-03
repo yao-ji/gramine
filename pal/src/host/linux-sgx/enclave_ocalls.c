@@ -835,6 +835,38 @@ int ocall_fsync(int fd) {
     }
 
     COPY_VALUE_TO_UNTRUSTED(&ocall_fsync_args->fd, fd);
+    COPY_VALUE_TO_UNTRUSTED(&ocall_fsync_args->umem, NULL);
+    COPY_VALUE_TO_UNTRUSTED(&ocall_fsync_args->usize, 0);
+
+    do {
+        retval = sgx_exitless_ocall(OCALL_FSYNC, ocall_fsync_args);
+    } while (retval == -EINTR);
+
+    if (retval < 0 && retval != -EBADF && retval != -EIO && retval != -EINVAL && retval != -EROFS) {
+        retval = -EPERM;
+    }
+
+    sgx_reset_ustack(old_ustack);
+    return retval;
+}
+
+int ocall_msync(void* umem, uint64_t usize) {
+    int retval = 0;
+    struct ocall_fsync* ocall_fsync_args;
+
+    void* old_ustack = sgx_prepare_ustack();
+    ocall_fsync_args = sgx_alloc_on_ustack_aligned(sizeof(*ocall_fsync_args),
+                                                   alignof(*ocall_fsync_args));
+    if (!ocall_fsync_args) {
+        sgx_reset_ustack(old_ustack);
+        return -EPERM;
+    }
+
+    assert(umem != NULL);
+
+    COPY_VALUE_TO_UNTRUSTED(&ocall_fsync_args->fd, 0);
+    COPY_VALUE_TO_UNTRUSTED(&ocall_fsync_args->umem, umem);
+    COPY_VALUE_TO_UNTRUSTED(&ocall_fsync_args->usize, usize);
 
     do {
         retval = sgx_exitless_ocall(OCALL_FSYNC, ocall_fsync_args);
