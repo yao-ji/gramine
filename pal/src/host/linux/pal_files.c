@@ -16,6 +16,8 @@
 #include "path_utils.h"
 #include "stat.h"
 
+#define MIN_UMEM_SIZE 4096U
+
 static int file_open(PAL_HANDLE* handle, const char* type, const char* uri, enum pal_access access,
                      pal_share_flags_t share, enum pal_create_mode create,
                      pal_stream_options_t options) {
@@ -24,6 +26,7 @@ static int file_open(PAL_HANDLE* handle, const char* type, const char* uri, enum
     PAL_HANDLE hdl = NULL;
     char* path = NULL;
     void* umem = NULL;
+    size_t usize = 0;
 
     if (strcmp(type, URI_TYPE_FILE))
         return -PAL_ERROR_INVAL;
@@ -75,7 +78,17 @@ static int file_open(PAL_HANDLE* handle, const char* type, const char* uri, enum
     hdl->file.seekable = !S_ISFIFO(st.st_mode);
 
     if (options & PAL_OPTION_PASSTHROUGH) {
-        umem = (void*)DO_SYSCALL(mmap, NULL, st.st_size, PROT_READ | PROT_WRITE, MAP_SHARED,
+        if (st.st_size == 0) {
+            ret = DO_SYSCALL(ftruncate, hdl->file.fd, MIN_UMEM_SIZE);
+            if (ret < 0) {
+                ret = unix_to_pal_error(ret);
+                goto fail;
+            }
+            usize = MIN_UMEM_SIZE;
+        } else {
+            usize = st.st_size;
+        }
+        umem = (void*)DO_SYSCALL(mmap, NULL, usize, PROT_READ | PROT_WRITE, MAP_SHARED,
                                  hdl->file.fd, 0);
         if (IS_PTR_ERR(umem)) {
             ret = unix_to_pal_error(PTR_TO_ERR(umem));
@@ -84,7 +97,7 @@ static int file_open(PAL_HANDLE* handle, const char* type, const char* uri, enum
     }
 
     hdl->file.umem = umem;
-    hdl->file.usize = st.st_size;
+    hdl->file.usize = usize;
 
     *handle = hdl;
     return 0;
@@ -120,6 +133,10 @@ static int64_t file_write(PAL_HANDLE handle, uint64_t offset, uint64_t count, co
         }
         uint64_t required_usize = offset + count;
         if (handle->file.usize < required_usize) {
+            ret = DO_SYSCALL(ftruncate, handle->file.fd, required_usize);
+            if (ret < 0) {
+                return unix_to_pal_error(ret);
+            }
             ret = DO_SYSCALL(munmap, handle->file.umem, handle->file.usize);
             if (ret < 0) {
                 return unix_to_pal_error(ret);

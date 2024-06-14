@@ -164,14 +164,16 @@ static int handle_deserialize(PAL_HANDLE* handle, const void* data, size_t size,
                 free(hdl);
                 return -PAL_ERROR_NOMEM;
             }
-            void* umem = NULL;
-            int ret = ocall_mmap_untrusted(&umem, hdl->file.usize, PROT_READ | PROT_WRITE,
-                                           MAP_SHARED, hdl->file.fd, 0);
-            if (ret < 0) {
-                free(hdl);
-                return unix_to_pal_error(ret);
+            if (hdl->file.umem) {
+                void* umem = NULL;
+                int ret = ocall_mmap_untrusted(&umem, hdl->file.usize, PROT_READ | PROT_WRITE,
+                                            MAP_SHARED, hdl->file.fd, 0);
+                if (ret < 0) {
+                    free(hdl);
+                    return unix_to_pal_error(ret);
+                }
+                hdl->file.umem = umem;
             }
-            hdl->file.umem = umem;
             break;
         }
         case PAL_TYPE_DIR: {

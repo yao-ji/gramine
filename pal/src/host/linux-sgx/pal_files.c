@@ -16,6 +16,8 @@
 #include "path_utils.h"
 #include "stat.h"
 
+#define MIN_UMEM_SIZE 4096U
+
 static int file_open(PAL_HANDLE* handle, const char* type, const char* uri,
                      enum pal_access pal_access, pal_share_flags_t pal_share,
                      enum pal_create_mode pal_create, pal_stream_options_t pal_options) {
@@ -23,6 +25,7 @@ static int file_open(PAL_HANDLE* handle, const char* type, const char* uri,
     int ret;
     int fd = -1;
     void* umem = NULL;
+    size_t usize = 0;
     PAL_HANDLE hdl = NULL;
 
     int flags = PAL_ACCESS_TO_LINUX_OPEN(pal_access) | PAL_CREATE_TO_LINUX_OPEN(pal_create)
@@ -68,7 +71,17 @@ static int file_open(PAL_HANDLE* handle, const char* type, const char* uri,
     }
 
     if (pal_options & PAL_OPTION_PASSTHROUGH) {
-        ret = ocall_mmap_untrusted(&umem, st.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        if (st.st_size == 0) {
+            ret = ocall_ftruncate(fd, MIN_UMEM_SIZE);
+            if (ret < 0) {
+                ret = unix_to_pal_error(ret);
+                goto fail;
+            }
+            usize = MIN_UMEM_SIZE;
+        } else {
+            usize = st.st_size;
+        }
+        ret = ocall_mmap_untrusted(&umem, usize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
         if (ret < 0) {
             ret = unix_to_pal_error(ret);
             goto fail;
@@ -77,7 +90,7 @@ static int file_open(PAL_HANDLE* handle, const char* type, const char* uri,
 
     hdl->file.fd = fd;
     hdl->file.umem = umem;
-    hdl->file.usize = st.st_size;
+    hdl->file.usize = usize;
     hdl->file.seekable = !S_ISFIFO(st.st_mode);
 
     *handle = hdl;
@@ -116,6 +129,10 @@ static int64_t file_write(PAL_HANDLE handle, uint64_t offset, uint64_t count, co
         }
         uint64_t required_usize = offset + count;
         if (handle->file.usize < required_usize) {
+            ret = ocall_ftruncate(handle->file.fd, required_usize);
+            if (ret < 0) {
+                return unix_to_pal_error(ret);
+            }
             ret = ocall_munmap_untrusted(handle->file.umem, handle->file.usize);
             if (ret < 0) {
                 return unix_to_pal_error(ret);
