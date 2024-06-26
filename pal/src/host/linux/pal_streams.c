@@ -124,14 +124,9 @@ int handle_deserialize(PAL_HANDLE* handle, const void* data, size_t size) {
                 free(hdl);
                 return -PAL_ERROR_NOMEM;
             }
-            if (hdl->file.umem) {
-                void* umem = (void*)DO_SYSCALL(mmap, NULL, hdl->file.usize, PROT_READ | PROT_WRITE,
-                                            MAP_SHARED, hdl->file.fd, 0);
-                if (IS_PTR_ERR(umem)) {
-                    free(hdl);
-                    return unix_to_pal_error(PTR_TO_ERR(umem));
-                }
-                hdl->file.umem = umem;
+            if (hdl->file.mapped) {
+                hdl->file.umem = NULL;
+                hdl->file.usize = 0;
             }
             break;
         }

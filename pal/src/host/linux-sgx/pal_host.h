@@ -48,6 +48,7 @@ typedef struct {
         struct {
             PAL_IDX fd;
             char* realpath;
+            bool mapped;
             void* umem;
             size_t usize;
             bool seekable; /* regular files are seekable, FIFO pipes are not */

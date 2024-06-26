@@ -16,16 +16,14 @@
 #include "path_utils.h"
 #include "stat.h"
 
-#define MIN_UMEM_SIZE 4096U
-
 static int file_open(PAL_HANDLE* handle, const char* type, const char* uri,
                      enum pal_access pal_access, pal_share_flags_t pal_share,
                      enum pal_create_mode pal_create, pal_stream_options_t pal_options) {
     assert(pal_create != PAL_CREATE_IGNORED);
     int ret;
     int fd = -1;
+    bool mapped = false;
     void* umem = NULL;
-    size_t usize = 0;
     PAL_HANDLE hdl = NULL;
 
     int flags = PAL_ACCESS_TO_LINUX_OPEN(pal_access) | PAL_CREATE_TO_LINUX_OPEN(pal_create)
@@ -71,26 +69,20 @@ static int file_open(PAL_HANDLE* handle, const char* type, const char* uri,
     }
 
     if (pal_options & PAL_OPTION_PASSTHROUGH) {
-        if (st.st_size == 0) {
-            ret = ocall_ftruncate(fd, MIN_UMEM_SIZE);
+        mapped = true;
+        if (st.st_size > 0) {
+            ret = ocall_mmap_untrusted(&umem, st.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
             if (ret < 0) {
                 ret = unix_to_pal_error(ret);
                 goto fail;
             }
-            usize = MIN_UMEM_SIZE;
-        } else {
-            usize = st.st_size;
-        }
-        ret = ocall_mmap_untrusted(&umem, usize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-        if (ret < 0) {
-            ret = unix_to_pal_error(ret);
-            goto fail;
         }
     }
 
     hdl->file.fd = fd;
+    hdl->file.mapped = mapped;
     hdl->file.umem = umem;
-    hdl->file.usize = usize;
+    hdl->file.usize = st.st_size;
     hdl->file.seekable = !S_ISFIFO(st.st_mode);
 
     *handle = hdl;
@@ -105,11 +97,32 @@ fail:
 
 static int64_t file_read(PAL_HANDLE handle, uint64_t offset, uint64_t count, void* buffer) {
     int64_t ret;
-    if (handle->file.umem) {
+    if (handle->file.mapped) {
         if (count > UINT64_MAX - offset) {
             return -PAL_ERROR_INVAL;
         }
-        ret = handle->file.usize < offset + count ? handle->file.usize - offset : count;
+        uint64_t required_usize = offset + count;
+        if (handle->file.usize < required_usize) {
+            if (handle->file.umem) {
+                ret = ocall_munmap_untrusted(handle->file.umem, handle->file.usize);
+                if (ret < 0) {
+                    return unix_to_pal_error(ret);
+                }
+            }
+            ret = ocall_ftruncate(handle->file.fd, required_usize);
+            if (ret < 0) {
+                return unix_to_pal_error(ret);
+            }
+            void* umem = NULL;
+            ret = ocall_mmap_untrusted(&umem, required_usize, PROT_READ | PROT_WRITE, MAP_SHARED,
+                                       handle->file.fd, 0);
+            if (ret < 0) {
+                return unix_to_pal_error(ret);
+            }
+            handle->file.umem = umem;
+            handle->file.usize = required_usize;
+        }
+        ret = count;
         if (!sgx_copy_to_enclave(buffer, count, (char*)handle->file.umem + offset, ret)) {
             ret = -EPERM;
         }
@@ -123,17 +136,19 @@ static int64_t file_read(PAL_HANDLE handle, uint64_t offset, uint64_t count, voi
 
 static int64_t file_write(PAL_HANDLE handle, uint64_t offset, uint64_t count, const void* buffer) {
     int64_t ret;
-    if (handle->file.umem) {
+    if (handle->file.mapped) {
         if (count > UINT64_MAX - offset) {
             return -PAL_ERROR_INVAL;
         }
         uint64_t required_usize = offset + count;
         if (handle->file.usize < required_usize) {
-            ret = ocall_ftruncate(handle->file.fd, required_usize);
-            if (ret < 0) {
-                return unix_to_pal_error(ret);
+            if (handle->file.umem) {
+                ret = ocall_munmap_untrusted(handle->file.umem, handle->file.usize);
+                if (ret < 0) {
+                    return unix_to_pal_error(ret);
+                }
             }
-            ret = ocall_munmap_untrusted(handle->file.umem, handle->file.usize);
+            ret = ocall_ftruncate(handle->file.fd, required_usize);
             if (ret < 0) {
                 return unix_to_pal_error(ret);
             }
@@ -161,7 +176,7 @@ static int64_t file_write(PAL_HANDLE handle, uint64_t offset, uint64_t count, co
 static void file_destroy(PAL_HANDLE handle) {
     assert(handle->hdr.type == PAL_TYPE_FILE);
 
-    if (handle->file.umem) {
+    if (handle->file.mapped && handle->file.umem) {
         int ret = ocall_munmap_untrusted(handle->file.umem, handle->file.usize);
         if (ret < 0) {
             log_error("munmap untrusted mememory at %p of size %ld failed: %s",
@@ -188,11 +203,13 @@ static int file_delete(PAL_HANDLE handle, enum pal_delete_mode delete_mode) {
 }
 
 static int file_setlength(PAL_HANDLE handle, uint64_t length) {
-    if (handle->file.umem) {
+    if (handle->file.mapped) {
         assert(length == 0);
-        int ret = ocall_munmap_untrusted(handle->file.umem, handle->file.usize);
-        if (ret < 0) {
-            return unix_to_pal_error(ret);
+        if (handle->file.umem) {
+            int ret = ocall_munmap_untrusted(handle->file.umem, handle->file.usize);
+            if (ret < 0) {
+                return unix_to_pal_error(ret);
+            }
         }
         handle->file.umem = NULL;
         handle->file.usize = 0;
@@ -203,7 +220,7 @@ static int file_setlength(PAL_HANDLE handle, uint64_t length) {
 
 static int file_flush(PAL_HANDLE handle) {
     int ret;
-    if (handle->file.umem) {
+    if (handle->file.mapped && handle->file.umem) {
         ret = ocall_msync(handle->file.umem, handle->file.usize);
     } else {
         ret = ocall_fsync(handle->file.fd);
